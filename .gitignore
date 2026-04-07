@@ -1,0 +1,17 @@
+.DS_Store
+.claude/
+.env
+.env.*
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+dist/
+*.egg-info/
+.venv/
+output/
+*.duckdb
+*.duckdb.wal
+.ruff_cache/
+models/
+!models/README.md

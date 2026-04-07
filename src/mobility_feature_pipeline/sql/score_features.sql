@@ -1,0 +1,179 @@
+-- score_features: single-station single-timestamp feature reconstruction.
+-- Mirrors training feature definitions (snapshot, lags, rolling, temporal)
+-- for the frozen Slice 2 model version.
+-- Any future feature change must update both training SQL fragments and this file.
+-- The consistency test in test_serve.py is the enforcement mechanism.
+
+WITH
+
+obs_point AS (
+    SELECT $station_id AS station_id, $obs_ts::TIMESTAMP AS obs_ts
+),
+
+-- Mirrors training snapshot.sql
+snapshot AS (
+    SELECT
+        g.station_id,
+        g.obs_ts,
+        m.window_start          AS snapshot_source_ts,
+        m.avg_bikes_available   AS ft_bikes_available,
+        m.avg_docks_available   AS ft_docks_available,
+        m.avg_availability_ratio AS ft_availability_ratio,
+        m.avg_capacity          AS ft_capacity
+    FROM obs_point g
+    ASOF JOIN raw_station_metrics_1min m
+        ON g.station_id = m.station_id
+       AND m.window_start <= g.obs_ts
+),
+
+-- Mirrors training lags.sql
+lag_15m AS (
+    SELECT g.station_id, g.obs_ts,
+           m.avg_bikes_available AS ft_bikes_available_lag_15m
+    FROM obs_point g
+    ASOF JOIN raw_station_metrics_1min m
+        ON g.station_id = m.station_id
+       AND m.window_start <= g.obs_ts - INTERVAL 15 MINUTE
+),
+
+lag_30m AS (
+    SELECT g.station_id, g.obs_ts,
+           m.avg_bikes_available AS ft_bikes_available_lag_30m
+    FROM obs_point g
+    ASOF JOIN raw_station_metrics_1min m
+        ON g.station_id = m.station_id
+       AND m.window_start <= g.obs_ts - INTERVAL 30 MINUTE
+),
+
+lag_60m AS (
+    SELECT g.station_id, g.obs_ts,
+           m.avg_bikes_available AS ft_bikes_available_lag_60m
+    FROM obs_point g
+    ASOF JOIN raw_station_metrics_1min m
+        ON g.station_id = m.station_id
+       AND m.window_start <= g.obs_ts - INTERVAL 60 MINUTE
+),
+
+lag_24h AS (
+    SELECT g.station_id, g.obs_ts,
+           m.avg_bikes_available AS ft_bikes_available_lag_24h
+    FROM obs_point g
+    ASOF JOIN raw_station_metrics_1min m
+        ON g.station_id = m.station_id
+       AND m.window_start <= g.obs_ts - INTERVAL 24 HOUR
+),
+
+-- Mirrors training rolling.sql
+rolling AS (
+    SELECT
+        g.station_id,
+        g.obs_ts,
+
+        (SELECT AVG(r.avg_bikes_available)
+         FROM raw_station_metrics_1min r
+         WHERE r.station_id = g.station_id
+           AND r.window_start BETWEEN g.obs_ts - INTERVAL 60 MINUTE AND g.obs_ts
+        ) AS ft_avg_bikes_60m,
+
+        (SELECT MIN(r.avg_bikes_available)
+         FROM raw_station_metrics_1min r
+         WHERE r.station_id = g.station_id
+           AND r.window_start BETWEEN g.obs_ts - INTERVAL 60 MINUTE AND g.obs_ts
+        ) AS ft_min_bikes_60m,
+
+        (SELECT MAX(r.avg_bikes_available)
+         FROM raw_station_metrics_1min r
+         WHERE r.station_id = g.station_id
+           AND r.window_start BETWEEN g.obs_ts - INTERVAL 60 MINUTE AND g.obs_ts
+        ) AS ft_max_bikes_60m,
+
+        (SELECT AVG(r.avg_availability_ratio)
+         FROM raw_station_metrics_1min r
+         WHERE r.station_id = g.station_id
+           AND r.window_start BETWEEN g.obs_ts - INTERVAL 60 MINUTE AND g.obs_ts
+        ) AS ft_avg_ratio_60m,
+
+        (SELECT AVG(r.avg_bikes_available)
+         FROM raw_station_metrics_1min r
+         WHERE r.station_id = g.station_id
+           AND r.window_start BETWEEN g.obs_ts - INTERVAL 24 HOUR AND g.obs_ts
+        ) AS ft_avg_bikes_24h,
+
+        (SELECT MIN(r.avg_bikes_available)
+         FROM raw_station_metrics_1min r
+         WHERE r.station_id = g.station_id
+           AND r.window_start BETWEEN g.obs_ts - INTERVAL 24 HOUR AND g.obs_ts
+        ) AS ft_min_bikes_24h,
+
+        (SELECT MAX(r.avg_bikes_available)
+         FROM raw_station_metrics_1min r
+         WHERE r.station_id = g.station_id
+           AND r.window_start BETWEEN g.obs_ts - INTERVAL 24 HOUR AND g.obs_ts
+        ) AS ft_max_bikes_24h,
+
+        (SELECT SUM(r.low_availability_events)::DOUBLE / NULLIF(SUM(r.event_count), 0)
+         FROM raw_station_metrics_1min r
+         WHERE r.station_id = g.station_id
+           AND r.window_start BETWEEN g.obs_ts - INTERVAL 24 HOUR AND g.obs_ts
+        ) AS ft_low_avail_freq_24h
+
+    FROM obs_point g
+),
+
+-- Mirrors training temporal.sql
+temporal AS (
+    SELECT
+        station_id,
+        obs_ts,
+        EXTRACT(HOUR FROM obs_ts)::INT   AS ft_hour_of_day,
+        EXTRACT(DOW FROM obs_ts)::INT    AS ft_day_of_week,
+        CASE WHEN EXTRACT(DOW FROM obs_ts) IN (0, 6) THEN 1 ELSE 0 END::INT AS ft_is_weekend
+    FROM obs_point
+)
+
+-- Mirrors training build_dataset.sql SELECT, minus forward_label
+SELECT
+    s.snapshot_source_ts,
+
+    s.ft_bikes_available,
+    s.ft_docks_available,
+    s.ft_availability_ratio,
+
+    l15.ft_bikes_available_lag_15m,
+    l30.ft_bikes_available_lag_30m,
+    l60.ft_bikes_available_lag_60m,
+    l24.ft_bikes_available_lag_24h,
+
+    r.ft_avg_bikes_60m,
+    r.ft_min_bikes_60m,
+    r.ft_max_bikes_60m,
+    r.ft_avg_ratio_60m,
+
+    r.ft_avg_bikes_24h,
+    r.ft_min_bikes_24h,
+    r.ft_max_bikes_24h,
+
+    r.ft_low_avail_freq_24h,
+
+    t.ft_hour_of_day,
+    t.ft_day_of_week,
+    t.ft_is_weekend,
+
+    s.ft_capacity,
+    s.ft_bikes_available / NULLIF(s.ft_capacity, 0) AS ft_pct_bikes_of_capacity,
+    s.ft_docks_available / NULLIF(s.ft_capacity, 0) AS ft_pct_docks_of_capacity,
+    s.ft_bikes_available - r.ft_avg_bikes_60m        AS ft_bikes_delta_60m
+
+FROM snapshot s
+LEFT JOIN lag_15m l15
+    ON s.station_id = l15.station_id AND s.obs_ts = l15.obs_ts
+LEFT JOIN lag_30m l30
+    ON s.station_id = l30.station_id AND s.obs_ts = l30.obs_ts
+LEFT JOIN lag_60m l60
+    ON s.station_id = l60.station_id AND s.obs_ts = l60.obs_ts
+LEFT JOIN lag_24h l24
+    ON s.station_id = l24.station_id AND s.obs_ts = l24.obs_ts
+LEFT JOIN rolling r
+    ON s.station_id = r.station_id AND s.obs_ts = r.obs_ts
+LEFT JOIN temporal t
+    ON s.station_id = t.station_id AND s.obs_ts = t.obs_ts

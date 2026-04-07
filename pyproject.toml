@@ -1,0 +1,36 @@
+[project]
+name = "mobility-feature-pipeline"
+version = "0.1.0"
+description = "Supervised training dataset for next-hour station availability risk prediction"
+requires-python = ">=3.11"
+dependencies = [
+    "duckdb>=1.2",
+    "click>=8.1",
+    "pandas>=2.0",
+    "pyarrow>=18.0",
+    "pydantic-settings>=2.0",
+    "lightgbm>=4.0",
+    "scikit-learn>=1.4",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.34",
+]
+
+[project.scripts]
+mobility-feature-pipeline = "mobility_feature_pipeline.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8.0", "ruff>=0.8", "httpx>=0.28"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mobility_feature_pipeline"]
+
+[tool.ruff]
+src = ["src", "tests"]
+line-length = 100
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
